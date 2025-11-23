@@ -10,6 +10,13 @@ WMS_BASE_URL = os.getenv("WMS_BASE_URL")
 WMS_USER = os.getenv("WMS_USER")
 WMS_PASSWORD = os.getenv("WMS_PASSWORD")
 
+@app.route("/debug-env")
+def debug_env():
+    return {
+        "WMS_BASE_URL": os.getenv("WMS_BASE_URL"),
+        "WMS_USER": os.getenv("WMS_USER"),
+        "WMS_PASSWORD": "******" if os.getenv("WMS_PASSWORD") else None
+    }
 
 @app.route("/")
 def home():
