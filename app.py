@@ -47,7 +47,7 @@ def get_order():
         "order_id__req_ship_date__lt": to_date,
         "order_id__facility_id__code": facility_code,
         "status_id": 0,
-        "values_list": "order_id,order_nbr,item_id,item_id__code,ord_qty"
+        "values_list": "order_id__order_nbr,item_id,item_id__code,ord_qty"
     }
 
     try:
