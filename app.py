@@ -13,38 +13,25 @@ WMS_PASSWORD = os.getenv("WMS_PASSWORD")
 
 
 # ---------------------------------------------------------
-# UTILITY — SAFE PARSER FOR WMS JSON
+# SAFE JSON PARSER FOR WMS
 # ---------------------------------------------------------
 def safe_wms_json(response):
-    """
-    WMS sometimes returns:
-        - list
-        - dict
-        - {"rows": [...]}
-        - string (bad)
-    This function normalizes it into a list.
-    """
     try:
         raw = response.json()
     except:
         return []
 
-    # If string returned → invalid → treat as empty
     if isinstance(raw, str):
         return []
 
-    # If list → good
     if isinstance(raw, list):
         return raw
 
-    # If dict → check for rows
     if isinstance(raw, dict):
         if "rows" in raw:
             return raw["rows"]
-        # flatten single-row dict into list
-        return [raw]
+        return [raw]  # flatten single dict
 
-    # Anything else → empty
     return []
 
 
@@ -82,7 +69,6 @@ def get_order():
         })
 
     api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/order_dtl/"
-
     params = {
         "order_id__req_ship_date__gte": from_date,
         "order_id__req_ship_date__lt": to_date,
@@ -121,7 +107,6 @@ def get_onhand():
         })
 
     api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory/"
-
     params = {
         "item_id__item_alternate_code__in": item_list,
         "container_id__curr_location_id__replenishment_zone_id__code": "PFACE",
@@ -188,7 +173,7 @@ def exist_move_req():
 
 
 # ---------------------------------------------------------
-# NEW — COMBINED REPLENISHMENT SUMMARY
+# NEW — REPLENISHMENT SUMMARY ENDPOINT
 # ---------------------------------------------------------
 @app.route("/replenSummary", methods=["GET"])
 def replen_summary():
@@ -204,10 +189,17 @@ def replen_summary():
     except:
         return jsonify({"status": "error", "message": "days must be a number"})
 
-    # Date range
     today = datetime.now().date()
-    from_date = today.strftime("%Y-%m-%d")
-    to_date = (today + timedelta(days=days)).strftime("%Y-%m-%d")
+
+    # IGNORE TODAY → start from tomorrow
+    start_day = today + timedelta(days=1)
+
+    # from_date = tomorrow
+    from_date = start_day.strftime("%Y-%m-%d")
+
+    # WMS needs LT next_day → end_day = start_day + days
+    end_day = start_day + timedelta(days=days)
+    to_date = end_day.strftime("%Y-%m-%d")
 
     # -------------------------------------------------
     # STEP 1: GET ORDER DATA
@@ -215,7 +207,7 @@ def replen_summary():
     order_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/order_dtl/"
     order_params = {
         "order_id__req_ship_date__gte": from_date,
-        "order_id__req_ship_date__lt": to_date,
+        "order_id__req_ship_date__lt": to_date,   # WMS correct pattern
         "order_id__facility_id__code": facility_code,
         "status_id": 0,
         "values_list": "order_id__order_nbr,item_id,item_id__code,ord_qty"
@@ -228,7 +220,6 @@ def replen_summary():
     except:
         return jsonify({"status": "error", "message": "Error calling getOrder"})
 
-    # Summarize ordered qty
     order_summary = {}
     for row in order_rows:
         item = row.get("item_id__code")
@@ -243,7 +234,7 @@ def replen_summary():
     item_csv = ",".join(order_summary.keys())
 
     # -------------------------------------------------
-    # STEP 2: ONHAND
+    # STEP 2: GET ONHAND
     # -------------------------------------------------
     onhand_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory/"
     onhand_params = {
@@ -269,7 +260,7 @@ def replen_summary():
         onhand_summary[item] = qty
 
     # -------------------------------------------------
-    # STEP 3: EXISTING MOVE REQUESTS
+    # STEP 3: EXIST MOVE REQUESTS
     # -------------------------------------------------
     mo_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/movement_request_dtl/"
     mo_params = {
@@ -299,7 +290,6 @@ def replen_summary():
     # FINAL MERGED OUTPUT
     # -------------------------------------------------
     final_rows = []
-
     for item, ord_qty in order_summary.items():
         final_rows.append({
             "item": item,
