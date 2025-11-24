@@ -13,14 +13,50 @@ WMS_PASSWORD = os.getenv("WMS_PASSWORD")
 
 
 # ---------------------------------------------------------
+# UTILITY — SAFE PARSER FOR WMS JSON
+# ---------------------------------------------------------
+def safe_wms_json(response):
+    """
+    WMS sometimes returns:
+        - list
+        - dict
+        - {"rows": [...]}
+        - string (bad)
+    This function normalizes it into a list.
+    """
+    try:
+        raw = response.json()
+    except:
+        return []
+
+    # If string returned → invalid → treat as empty
+    if isinstance(raw, str):
+        return []
+
+    # If list → good
+    if isinstance(raw, list):
+        return raw
+
+    # If dict → check for rows
+    if isinstance(raw, dict):
+        if "rows" in raw:
+            return raw["rows"]
+        # flatten single-row dict into list
+        return [raw]
+
+    # Anything else → empty
+    return []
+
+
+# ---------------------------------------------------------
 # DEBUG ENV ENDPOINT
 # ---------------------------------------------------------
 @app.route("/debug-env")
 def debug_env():
     return {
-        "WMS_BASE_URL": os.getenv("WMS_BASE_URL"),
-        "WMS_USER": os.getenv("WMS_USER"),
-        "WMS_PASSWORD": "******" if os.getenv("WMS_PASSWORD") else None
+        "WMS_BASE_URL": WMS_BASE_URL,
+        "WMS_USER": WMS_USER,
+        "WMS_PASSWORD": "******" if WMS_PASSWORD else None
     }
 
 
@@ -56,32 +92,13 @@ def get_order():
     }
 
     try:
-        response = requests.get(
-            api_url,
-            params=params,
-            auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD),
-            timeout=30
-        )
-
-        if response.status_code == 404:
-            return jsonify({"status": "success", "noData": True, "rows": []})
-
-        if 200 <= response.status_code < 300:
-            try:
-                data = response.json()
-            except:
-                return {"status": "error", "message": "WMS returned non-JSON"}
-
-            return jsonify({
-                "status": "success",
-                "noData": False if data else True,
-                "rows": data
-            })
-
+        response = requests.get(api_url, params=params,
+                                auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
+        rows = safe_wms_json(response)
         return jsonify({
-            "status": "error",
-            "httpStatus": response.status_code,
-            "body": response.text
+            "status": "success",
+            "noData": False if rows else True,
+            "rows": rows
         })
 
     except Exception as e:
@@ -113,32 +130,15 @@ def get_onhand():
     }
 
     try:
-        response = requests.get(
-            api_url,
-            params=params,
-            auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD),
-            timeout=30
-        )
+        response = requests.get(api_url, params=params,
+                                auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
 
-        if response.status_code == 404:
-            return jsonify({"status": "success", "noData": True, "rows": []})
-
-        if 200 <= response.status_code < 300:
-            try:
-                data = response.json()
-            except:
-                return {"status": "error", "message": "WMS returned non-JSON"}
-
-            return jsonify({
-                "status": "success",
-                "noData": False if data else True,
-                "rows": data
-            })
+        rows = safe_wms_json(response)
 
         return jsonify({
-            "status": "error",
-            "httpStatus": response.status_code,
-            "body": response.text
+            "status": "success",
+            "noData": False if rows else True,
+            "rows": rows
         })
 
     except Exception as e:
@@ -171,40 +171,24 @@ def exist_move_req():
     }
 
     try:
-        response = requests.get(
-            api_url,
-            params=params,
-            auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD),
-            timeout=30
-        )
+        response = requests.get(api_url, params=params,
+                                auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
 
-        if response.status_code == 404:
-            return jsonify({"status": "success", "noData": True, "rows": []})
-
-        if 200 <= response.status_code < 300:
-            try:
-                data = response.json()
-            except:
-                return {"status": "error", "message": "WMS returned non-JSON"}
-
-            return jsonify({
-                "status": "success",
-                "noData": False if data else True,
-                "rows": data
-            })
+        rows = safe_wms_json(response)
 
         return jsonify({
-            "status": "error",
-            "httpStatus": response.status_code,
-            "body": response.text
+            "status": "success",
+            "noData": False if rows else True,
+            "rows": rows
         })
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
 
+
 # ---------------------------------------------------------
-# NEW COMBINED ENDPOINT
+# NEW — COMBINED REPLENISHMENT SUMMARY
 # ---------------------------------------------------------
 @app.route("/replenSummary", methods=["GET"])
 def replen_summary():
@@ -220,14 +204,14 @@ def replen_summary():
     except:
         return jsonify({"status": "error", "message": "days must be a number"})
 
-    # Calculate date range
+    # Date range
     today = datetime.now().date()
     from_date = today.strftime("%Y-%m-%d")
     to_date = (today + timedelta(days=days)).strftime("%Y-%m-%d")
 
-    # ------------------------------
-    # STEP 1 — GET ORDER DATA
-    # ------------------------------
+    # -------------------------------------------------
+    # STEP 1: GET ORDER DATA
+    # -------------------------------------------------
     order_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/order_dtl/"
     order_params = {
         "order_id__req_ship_date__gte": from_date,
@@ -240,27 +224,27 @@ def replen_summary():
     try:
         order_res = requests.get(order_url, params=order_params,
                                  auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-        order_rows = order_res.json() if order_res.status_code == 200 else []
+        order_rows = safe_wms_json(order_res)
     except:
         return jsonify({"status": "error", "message": "Error calling getOrder"})
 
-    # Aggregate ordered qty per item
+    # Summarize ordered qty
     order_summary = {}
     for row in order_rows:
         item = row.get("item_id__code")
+        if not item:
+            continue
         qty = float(row.get("ord_qty", 0))
         order_summary[item] = order_summary.get(item, 0) + qty
 
-    # No orders? return empty
     if not order_summary:
         return jsonify({"status": "success", "rows": []})
 
-    # Create CSV for WMS queries
     item_csv = ",".join(order_summary.keys())
 
-    # ------------------------------
-    # STEP 2 — GET ONHAND
-    # ------------------------------
+    # -------------------------------------------------
+    # STEP 2: ONHAND
+    # -------------------------------------------------
     onhand_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory/"
     onhand_params = {
         "item_id__item_alternate_code__in": item_csv,
@@ -269,23 +253,24 @@ def replen_summary():
         "values_list": "item_id__item_alternate_code,curr_qty"
     }
 
-    onhand_summary = {}
     try:
         oh_res = requests.get(onhand_url, params=onhand_params,
                               auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-        oh_rows = oh_res.json() if oh_res.status_code == 200 else []
-
-        for row in oh_rows:
-            item = row.get("item_id__item_alternate_code")
-            qty = float(row.get("curr_qty", 0))
-            onhand_summary[item] = qty
-
+        oh_rows = safe_wms_json(oh_res)
     except:
         return jsonify({"status": "error", "message": "Error calling getOnhand"})
 
-    # ------------------------------
-    # STEP 3 — GET EXISTING MOVE REQUESTS
-    # ------------------------------
+    onhand_summary = {}
+    for row in oh_rows:
+        item = row.get("item_id__item_alternate_code")
+        if not item:
+            continue
+        qty = float(row.get("curr_qty", 0))
+        onhand_summary[item] = qty
+
+    # -------------------------------------------------
+    # STEP 3: EXISTING MOVE REQUESTS
+    # -------------------------------------------------
     mo_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/movement_request_dtl/"
     mo_params = {
         "item_id__code__in": item_csv,
@@ -295,23 +280,24 @@ def replen_summary():
         "values_list": "item_id__code,req_qty"
     }
 
-    mo_summary = {}
     try:
         mo_res = requests.get(mo_url, params=mo_params,
                               auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-        mo_rows = mo_res.json() if mo_res.status_code == 200 else []
-
-        for row in mo_rows:
-            item = row.get("item_id__code")
-            qty = float(row.get("req_qty", 0))
-            mo_summary[item] = mo_summary.get(item, 0) + qty
-
+        mo_rows = safe_wms_json(mo_res)
     except:
         return jsonify({"status": "error", "message": "Error calling existMoveReq"})
 
-    # ------------------------------
-    # STEP 4 — BUILD FINAL RESPONSE
-    # ------------------------------
+    mo_summary = {}
+    for row in mo_rows:
+        item = row.get("item_id__code")
+        if not item:
+            continue
+        qty = float(row.get("req_qty", 0))
+        mo_summary[item] = mo_summary.get(item, 0) + qty
+
+    # -------------------------------------------------
+    # FINAL MERGED OUTPUT
+    # -------------------------------------------------
     final_rows = []
 
     for item, ord_qty in order_summary.items():
@@ -322,7 +308,6 @@ def replen_summary():
             "pending_mo_qty": mo_summary.get(item, 0)
         })
 
-    # Sort output by item for consistency
     final_rows = sorted(final_rows, key=lambda x: x["item"])
 
     return jsonify({
