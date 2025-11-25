@@ -6,37 +6,55 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Load environment variables from Render
+# Load environment variables
 WMS_BASE_URL = os.getenv("WMS_BASE_URL")
 WMS_USER = os.getenv("WMS_USER")
 WMS_PASSWORD = os.getenv("WMS_PASSWORD")
 
 
 # ---------------------------------------------------------
-# SAFE JSON PARSER FOR WMS
+# SAFE JSON PARSER (FINAL FIXED VERSION)
 # ---------------------------------------------------------
 def safe_wms_json(response):
+    """
+    Normalizes all Oracle WMS LGF API return formats:
+      1) list of rows
+      2) {"rows": [...]}
+      3) {"results": [...], "result_count": X}
+      4) single dict --> converted to list
+      5) strings --> ignored
+    """
     try:
         raw = response.json()
     except:
+        print("⚠ JSON decode error")
         return []
 
     if isinstance(raw, str):
+        print("⚠ WMS returned STRING → ignoring")
         return []
 
     if isinstance(raw, list):
         return raw
 
     if isinstance(raw, dict):
-        if "rows" in raw:
+
+        # Oracle pagination style
+        if "results" in raw and isinstance(raw["results"], list):
+            return raw["results"]
+
+        # older API style
+        if "rows" in raw and isinstance(raw["rows"], list):
             return raw["rows"]
-        return [raw]  # flatten single dict
+
+        # single-row dict
+        return [raw]
 
     return []
 
 
 # ---------------------------------------------------------
-# DEBUG ENV ENDPOINT
+# DEBUG
 # ---------------------------------------------------------
 @app.route("/debug-env")
 def debug_env():
@@ -53,7 +71,7 @@ def home():
 
 
 # ---------------------------------------------------------
-# GET ORDER ENDPOINT
+# GET ORDER
 # ---------------------------------------------------------
 @app.route("/getOrder", methods=["GET"])
 def get_order():
@@ -63,10 +81,7 @@ def get_order():
     facility_code = request.args.get("facility_code")
 
     if not (from_date and to_date and facility_code):
-        return jsonify({
-            "status": "error",
-            "message": "Missing required params: from_date, to_date, facility_code"
-        })
+        return jsonify({"status": "error", "message": "Missing required params"})
 
     api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/order_dtl/"
     params = {
@@ -81,144 +96,109 @@ def get_order():
         response = requests.get(api_url, params=params,
                                 auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
         rows = safe_wms_json(response)
-        return jsonify({
-            "status": "success",
-            "noData": False if rows else True,
-            "rows": rows
-        })
+        return {"status": "success", "rows": rows, "noData": not bool(rows)}
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        return {"status": "error", "message": str(e)}
 
 
 # ---------------------------------------------------------
-# GET ONHAND ENDPOINT
+# GET ONHAND
 # ---------------------------------------------------------
 @app.route("/getOnhand", methods=["GET"])
 def get_onhand():
 
     item_list = request.args.get("items")
-    facility_code = request.args.get("facility")
+    facility = request.args.get("facility")
 
-    if not (item_list and facility_code):
-        return jsonify({
-            "status": "error",
-            "message": "Missing required params: items, facility"
-        })
+    if not (item_list and facility):
+        return {"status": "error", "message": "Missing required params"}
 
     api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory/"
     params = {
         "item_id__item_alternate_code__in": item_list,
         "container_id__curr_location_id__replenishment_zone_id__code": "PFACE",
-        "facility_id__code": facility_code,
+        "facility_id__code": facility,
         "values_list": "item_id__item_alternate_code,curr_qty"
     }
 
     try:
         response = requests.get(api_url, params=params,
                                 auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-
         rows = safe_wms_json(response)
-
-        return jsonify({
-            "status": "success",
-            "noData": False if rows else True,
-            "rows": rows
-        })
+        return {"status": "success", "rows": rows, "noData": not bool(rows)}
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        return {"status": "error", "message": str(e)}
 
 
 # ---------------------------------------------------------
-# EXIST MOVE REQUEST ENDPOINT
+# EXISTING MOVE REQUEST
 # ---------------------------------------------------------
 @app.route("/existMoveReq", methods=["GET"])
 def exist_move_req():
 
     item_list = request.args.get("items")
-    facility_code = request.args.get("facility")
+    facility = request.args.get("facility")
 
-    if not (item_list and facility_code):
-        return jsonify({
-            "status": "error",
-            "message": "Missing required params: items, facility"
-        })
+    if not (item_list and facility):
+        return {"status": "error", "message": "Missing required params"}
 
     api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/movement_request_dtl/"
-
     params = {
         "item_id__code__in": item_list,
         "dest_zone_id__code": "PFACE",
         "status_id__in": "0,10",
-        "movement_req_id__facility_id__code": facility_code,
+        "movement_req_id__facility_id__code": facility,
         "values_list": "item_id__code,req_qty"
     }
 
     try:
         response = requests.get(api_url, params=params,
                                 auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-
         rows = safe_wms_json(response)
-
-        return jsonify({
-            "status": "success",
-            "noData": False if rows else True,
-            "rows": rows
-        })
+        return {"status": "success", "rows": rows, "noData": not bool(rows)}
 
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
+        return {"status": "error", "message": str(e)}
 
 
 # ---------------------------------------------------------
-# NEW — REPLENISHMENT SUMMARY ENDPOINT
+# REPLENISHMENT SUMMARY (FIXED)
 # ---------------------------------------------------------
 @app.route("/replenSummary", methods=["GET"])
 def replen_summary():
 
     days = request.args.get("days")
-    facility_code = request.args.get("facility")
+    facility = request.args.get("facility")
 
-    if not (days and facility_code):
-        return jsonify({"status": "error", "message": "Missing required params: days, facility"})
+    if not (days and facility):
+        return {"status": "error", "message": "Missing required params"}
 
-    try:
-        days = int(days)
-    except:
-        return jsonify({"status": "error", "message": "days must be a number"})
+    days = int(days)
 
+    # ignore today → start tomorrow
     today = datetime.now().date()
-
-    # IGNORE TODAY → start from tomorrow
     start_day = today + timedelta(days=1)
 
-    # from_date = tomorrow
     from_date = start_day.strftime("%Y-%m-%d")
-
-    # WMS needs LT next_day → end_day = start_day + days
-    end_day = start_day + timedelta(days=days)
-    to_date = end_day.strftime("%Y-%m-%d")
+    to_date = (start_day + timedelta(days=days)).strftime("%Y-%m-%d")   # LT comparison
 
     # -------------------------------------------------
-    # STEP 1: GET ORDER DATA
+    # STEP 1: GET ORDERS
     # -------------------------------------------------
     order_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/order_dtl/"
     order_params = {
         "order_id__req_ship_date__gte": from_date,
-        "order_id__req_ship_date__lt": to_date,   # WMS correct pattern
-        "order_id__facility_id__code": facility_code,
+        "order_id__req_ship_date__lt": to_date,
+        "order_id__facility_id__code": facility,
         "status_id": 0,
         "values_list": "order_id__order_nbr,item_id,item_id__code,ord_qty"
     }
 
-    try:
-        order_res = requests.get(order_url, params=order_params,
-                                 auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-        order_rows = safe_wms_json(order_res)
-    except:
-        return jsonify({"status": "error", "message": "Error calling getOrder"})
+    order_res = requests.get(order_url, params=order_params,
+                             auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
+    order_rows = safe_wms_json(order_res)
 
     order_summary = {}
     for row in order_rows:
@@ -229,65 +209,52 @@ def replen_summary():
         order_summary[item] = order_summary.get(item, 0) + qty
 
     if not order_summary:
-        return jsonify({"status": "success", "rows": []})
+        return {"status": "success", "rows": []}
 
-    item_csv = ",".join(order_summary.keys())
+    item_list = ",".join(order_summary.keys())
 
     # -------------------------------------------------
     # STEP 2: GET ONHAND
     # -------------------------------------------------
     onhand_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory/"
-    onhand_params = {
-        "item_id__item_alternate_code__in": item_csv,
+    oh_params = {
+        "item_id__item_alternate_code__in": item_list,
         "container_id__curr_location_id__replenishment_zone_id__code": "PFACE",
-        "facility_id__code": facility_code,
+        "facility_id__code": facility,
         "values_list": "item_id__item_alternate_code,curr_qty"
     }
 
-    try:
-        oh_res = requests.get(onhand_url, params=onhand_params,
-                              auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-        oh_rows = safe_wms_json(oh_res)
-    except:
-        return jsonify({"status": "error", "message": "Error calling getOnhand"})
+    oh_res = requests.get(onhand_url, params=oh_params,
+                          auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
+    oh_rows = safe_wms_json(oh_res)
 
-    onhand_summary = {}
-    for row in oh_rows:
-        item = row.get("item_id__item_alternate_code")
-        if not item:
-            continue
-        qty = float(row.get("curr_qty", 0))
-        onhand_summary[item] = qty
+    onhand_summary = {row.get("item_id__item_alternate_code"): float(row.get("curr_qty", 0))
+                      for row in oh_rows if row.get("item_id__item_alternate_code")}
 
     # -------------------------------------------------
-    # STEP 3: EXIST MOVE REQUESTS
+    # STEP 3: GET MOVE REQUESTS
     # -------------------------------------------------
     mo_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/movement_request_dtl/"
     mo_params = {
-        "item_id__code__in": item_csv,
+        "item_id__code__in": item_list,
         "dest_zone_id__code": "PFACE",
         "status_id__in": "0,10",
-        "movement_req_id__facility_id__code": facility_code,
+        "movement_req_id__facility_id__code": facility,
         "values_list": "item_id__code,req_qty"
     }
 
-    try:
-        mo_res = requests.get(mo_url, params=mo_params,
-                              auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
-        mo_rows = safe_wms_json(mo_res)
-    except:
-        return jsonify({"status": "error", "message": "Error calling existMoveReq"})
+    mo_res = requests.get(mo_url, params=mo_params,
+                          auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
+    mo_rows = safe_wms_json(mo_res)
 
     mo_summary = {}
     for row in mo_rows:
         item = row.get("item_id__code")
-        if not item:
-            continue
         qty = float(row.get("req_qty", 0))
         mo_summary[item] = mo_summary.get(item, 0) + qty
 
     # -------------------------------------------------
-    # FINAL MERGED OUTPUT
+    # COMBINE FINAL RESULT
     # -------------------------------------------------
     final_rows = []
     for item, ord_qty in order_summary.items():
@@ -298,15 +265,12 @@ def replen_summary():
             "pending_mo_qty": mo_summary.get(item, 0)
         })
 
-    final_rows = sorted(final_rows, key=lambda x: x["item"])
-
-    return jsonify({
+    return {
         "status": "success",
         "from_date": from_date,
         "to_date": to_date,
-        "facility": facility_code,
-        "rows": final_rows
-    })
+        "rows": sorted(final_rows, key=lambda x: x["item"])
+    }
 
 
 # ---------------------------------------------------------
