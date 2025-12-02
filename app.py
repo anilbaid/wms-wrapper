@@ -361,6 +361,93 @@ def shipping_kpi():
         "summary": summary
     }
 
+@app.route("/receivingKPI", methods=["GET"])
+def receiving_kpi():
+
+    days = request.args.get("days")
+    facility = request.args.get("facility")
+
+    if not (days and facility):
+        return {"status": "error", "message": "Missing required params"}
+
+    try:
+        days = int(days)
+    except:
+        return {"status": "error", "message": "Days must be numeric"}
+
+    # ---------------------------------------------------
+    # DATE RANGE
+    # ---------------------------------------------------
+    today = datetime.now()
+    from_date = (today - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+    to_date = today.strftime("%Y-%m-%dT23:59:59Z")
+
+    # ---------------------------------------------------
+    # API CALL
+    # ---------------------------------------------------
+    api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory_history/"
+    params = {
+        "create_ts__range": f"{from_date},{to_date}",
+        "facility_id__code": facility,
+        "history_activity_id": 1,      # Container received
+        "company_id__code": "INTELLINUM2"
+    }
+
+    try:
+        response = requests.get(
+            api_url,
+            params=params,
+            auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD),
+            timeout=30
+        )
+        rows = safe_wms_json(response)
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    # ---------------------------------------------------
+    # KPI CALCULATIONS
+    # ---------------------------------------------------
+    total_units = 0
+    unique_shipments = set()
+    unique_containers = set()
+
+    for row in rows:
+
+        # Units shipped = absolute value of adj_qty or units_shipped field
+        try:
+            received = float(row.get("adj_qty") or 0)
+        except:
+            received = 0
+
+        total_units += received
+
+        # Unique order count
+        shipment_nbr = row.get("shipment_nbr")
+        if order_nbr:
+            unique_shipments.add(shipment_nbr)
+
+        # Unique container count
+        container = row.get("container_nbr")
+        if container:
+            unique_containers.add(container)
+
+    summary = {
+        "total_units_received": total_units,
+        "total_shipment_received": len(unique_orders),
+        "total_containers_received": len(unique_containers)
+    }
+
+    # ---------------------------------------------------
+    # FINAL RESPONSE
+    # ---------------------------------------------------
+    return {
+        "status": "success",
+        "from_date": from_date,
+        "to_date": to_date,
+        "summary": summary
+    }
+
 
 # ---------------------------------------------------------
 # LOCAL RUN
