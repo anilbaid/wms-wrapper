@@ -434,7 +434,7 @@ def receiving_kpi():
 
     summary = {
         "total_units_received": total_units,
-        "total_shipment_received": len(unique_orders),
+        "total_shipment_received": len(unique_shipments),
         "total_containers_received": len(unique_containers)
     }
 
