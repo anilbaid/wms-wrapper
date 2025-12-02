@@ -424,7 +424,7 @@ def receiving_kpi():
 
         # Unique order count
         shipment_nbr = row.get("shipment_nbr")
-        if order_nbr:
+        if shipment_nbr:
             unique_shipments.add(shipment_nbr)
 
         # Unique container count
