@@ -448,6 +448,142 @@ def receiving_kpi():
         "summary": summary
     }
 
+#---Ontimereceiving---
+# ---------------------------------------------------------
+# ON-TIME RECEIVING KPI
+# ---------------------------------------------------------
+@app.route("/onTimeReceivingKPI", methods=["GET"])
+def on_time_receiving_kpi():
+
+    days = request.args.get("days")
+    facility = request.args.get("facility")
+
+    if not (days and facility):
+        return {"status": "error", "message": "Missing required params"}
+
+    try:
+        days = int(days)
+    except:
+        return {"status": "error", "message": "Days must be numeric"}
+
+    # DATE RANGE
+    today = datetime.utcnow()
+    from_dt = today - timedelta(days=days)
+    from_date = from_dt.strftime("%Y-%m-%d")
+    to_date = today.strftime("%Y-%m-%d")
+
+    # -------------------------------------------------
+    # STEP 1: GET EXPECTED RECEIPT DATES (FROM PO HDR)
+    # -------------------------------------------------
+    po_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/purchase_order_hdr/"
+    po_params = {
+        "facility_id__code": facility,
+        "delivery_date__range": f"{from_date},{to_date}",
+        "company_id__code": "INTELLINUM2",
+    }
+
+    try:
+        po_res = requests.get(po_url, params=po_params,
+                              auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
+        po_rows = safe_wms_json(po_res)
+    except Exception as e:
+        return {"status": "error", "message": f"PO API error: {e}"}
+
+    expected_map = {}  # po_nbr → expected_delivery_ts
+
+    for row in po_rows:
+        po = row.get("po_nbr")
+        delivery = row.get("delivery_date")
+
+        if po and delivery:
+            # Assume expected delivery by end of day 23:59:59
+            expected_ts = f"{delivery}T23:59:59Z"
+            expected_map[po] = expected_ts
+
+    # If no POs found
+    if not expected_map:
+        return {
+            "status": "success",
+            "from_date": from_date,
+            "to_date": to_date,
+            "message": "No purchase orders found in date range",
+            "summary": {},
+            "rows": []
+        }
+
+    # -------------------------------------------------
+    # STEP 2: GET ACTUAL RECEIPTS (INVENTORY HISTORY)
+    # -------------------------------------------------
+    ih_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory_history/"
+    ih_params = {
+        "history_activity_id": 4,   # Container Received
+        "facility_id__code": facility,
+        "company_id__code": "INTELLINUM2",
+        "create_ts__range": f"{from_date}T00:00:00Z,{to_date}T23:59:59Z"
+    }
+
+    try:
+        ih_res = requests.get(ih_url, params=ih_params,
+                              auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD), timeout=30)
+        ih_rows = safe_wms_json(ih_res)
+    except Exception as e:
+        return {"status": "error", "message": f"Inventory history API error: {e}"}
+
+    # -------------------------------------------------
+    # STEP 3: MATCH ACTUAL vs EXPECTED
+    # -------------------------------------------------
+    total_receipts = 0
+    on_time = 0
+    late = 0
+
+    detail_rows = []  # for optional display
+
+    for row in ih_rows:
+        po = row.get("po_nbr")
+        actual_ts = row.get("create_ts")
+
+        if not po or not actual_ts:
+            continue
+
+        if po not in expected_map:
+            continue  # PO not in expected window
+
+        expected_ts = expected_map[po]
+
+        total_receipts += 1
+
+        # Compare timestamps
+        if actual_ts <= expected_ts:
+            status = "ON_TIME"
+            on_time += 1
+        else:
+            status = "LATE"
+            late += 1
+
+        detail_rows.append({
+            "po_nbr": po,
+            "expected_ts": expected_ts,
+            "actual_ts": actual_ts,
+            "status": status
+        })
+
+    # -------------------------------------------------
+    # STEP 4: KPI SUMMARY
+    # -------------------------------------------------
+    summary = {
+        "total_receipts": total_receipts,
+        "on_time_receipts": on_time,
+        "late_receipts": late,
+        "on_time_percent": (on_time / total_receipts * 100) if total_receipts > 0 else 0
+    }
+
+    return {
+        "status": "success",
+        "from_date": from_date,
+        "to_date": to_date,
+        "summary": summary,
+        "rows": detail_rows
+    }
 
 # ---------------------------------------------------------
 # LOCAL RUN
