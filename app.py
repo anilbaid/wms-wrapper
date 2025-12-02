@@ -358,9 +358,7 @@ def shipping_kpi():
         "status": "success",
         "from_date": from_date,
         "to_date": to_date,
-        "summary": summary,
-        "row_count": len(rows),
-        "rows": rows
+        "summary": summary
     }
 
 
