@@ -361,8 +361,8 @@ def shipping_kpi():
         "summary": summary
     }
 
-@app.route("/receivingKPI", methods=["GET"])
-def receiving_kpi():
+@app.route("/receivingKPI1", methods=["GET"])
+def receiving_kpi1():
 
     days = request.args.get("days")
     facility = request.args.get("facility")
@@ -586,8 +586,8 @@ def on_time_receiving_kpi():
     }
     
     
-@app.route("/receivingKPI1", methods=["GET"])
-def receiving_kpi1():
+@app.route("/receivingKPI", methods=["GET"])
+def receiving_kpi():
 
     days = request.args.get("days")
     facility = request.args.get("facility")
