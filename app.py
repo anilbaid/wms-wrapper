@@ -586,7 +586,7 @@ def on_time_receiving_kpi():
     }
     
     
- @app.route("/receivingKPI1", methods=["GET"])
+@app.route("/receivingKPI1", methods=["GET"])
 def receiving_kpi1():
 
     days = request.args.get("days")
