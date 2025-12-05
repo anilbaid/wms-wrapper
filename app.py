@@ -584,6 +584,178 @@ def on_time_receiving_kpi():
         "summary": summary,
         "rows": detail_rows
     }
+    
+    
+ @app.route("/receivingKPI1", methods=["GET"])
+def receiving_kpi1():
+
+    days = request.args.get("days")
+    facility = request.args.get("facility")
+
+    if not (days and facility):
+        return {"status": "error", "message": "Missing required params"}
+
+    try:
+        days = int(days)
+    except:
+        return {"status": "error", "message": "Days must be numeric"}
+
+    # ---------------------------------------------------
+    # DATE RANGE
+    # ---------------------------------------------------
+    today = datetime.now()
+    from_date = (today - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+    to_date = today.strftime("%Y-%m-%dT23:59:59Z")
+
+    # Base API URL
+    api_url = f"{WMS_BASE_URL}/wms/lgfapi/v10/entity/inventory_history/"
+
+    # ---------------------------------------------------
+    # ACTIVITY 1 — LPN RECEIVED DATA
+    # ---------------------------------------------------
+    params_act1 = {
+        "create_ts__range": f"{from_date},{to_date}",
+        "facility_id__code": facility,
+        "history_activity_id": 1,   # LPN Received
+        "company_id__code": "INTELLINUM2"
+    }
+
+    try:
+        response = requests.get(
+            api_url,
+            params=params_act1,
+            auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD),
+            timeout=30
+        )
+        rows = safe_wms_json(response)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    # ---------------------------------------------------
+    # KPI CALCULATIONS FOR ACTIVITY 1
+    # ---------------------------------------------------
+    total_units = 0
+    unique_shipments = set()
+    unique_containers = set()
+
+    # Shipment → {dock_time, lpns}
+    shipment_lpn_map = {}
+
+    for row in rows:
+        # Units received
+        try:
+            received = float(row.get("adj_qty") or 0)
+        except:
+            received = 0
+        total_units += received
+
+        # Unique shipments
+        shipment = row.get("shipment_nbr")
+        if shipment:
+            unique_shipments.add(shipment)
+
+        # Unique LPNs (containers)
+        lpn = row.get("container_nbr")
+        if lpn:
+            unique_containers.add(lpn)
+
+        # Capture Dock Time (earliest activity 1 timestamp)
+        if shipment and lpn:
+            ts = row.get("create_ts")
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+            if shipment not in shipment_lpn_map:
+                shipment_lpn_map[shipment] = {
+                    "dock_time": dt,
+                    "lpns": set([lpn])
+                }
+            else:
+                shipment_lpn_map[shipment]["dock_time"] = min(
+                    shipment_lpn_map[shipment]["dock_time"], dt
+                )
+                shipment_lpn_map[shipment]["lpns"].add(lpn)
+
+    # ---------------------------------------------------
+    # ACTIVITY 51 — STOCK TIME LOOKUP (PUTAWAY COMPLETE)
+    # ---------------------------------------------------
+    dock_to_stock_minutes = []
+
+    for shipment, data in shipment_lpn_map.items():
+        lpns = list(data["lpns"])
+        dock_time = data["dock_time"]
+        if not lpns:
+            continue
+
+        # Prepare CSV for container_nbr__in
+        lpn_csv = ",".join(lpns)
+
+        params_act51 = {
+            "create_ts__range": f"{from_date},{to_date}",
+            "facility_id__code": facility,
+            "history_activity_id": 51,  # Putaway / Stocked
+            "company_id__code": "INTELLINUM2",
+            "container_nbr__in": lpn_csv
+        }
+
+        try:
+            act51_resp = requests.get(
+                api_url,
+                params=params_act51,
+                auth=HTTPBasicAuth(WMS_USER, WMS_PASSWORD),
+                timeout=30
+            )
+            act51_rows = safe_wms_json(act51_resp)
+        except Exception:
+            continue
+
+        # Per-LPN earliest stock time
+        lpn_stock_times = {}
+
+        for r in act51_rows:
+            lpn = r.get("container_nbr")
+            ts = r.get("create_ts")
+            if not (lpn and ts):
+                continue
+
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+            if lpn not in lpn_stock_times:
+                lpn_stock_times[lpn] = dt
+            else:
+                lpn_stock_times[lpn] = min(lpn_stock_times[lpn], dt)
+
+        # Compute Dock-to-Stock time for each LPN
+        for lpn, stock_time in lpn_stock_times.items():
+            dts = (stock_time - dock_time).total_seconds() / 60
+            if dts >= 0:
+                dock_to_stock_minutes.append(dts)
+
+    # Average DTS for the period
+    avg_dts = (
+        round(sum(dock_to_stock_minutes) / len(dock_to_stock_minutes), 2)
+        if dock_to_stock_minutes else 0
+    )
+
+    # ---------------------------------------------------
+    # FINAL SUMMARY
+    # ---------------------------------------------------
+    summary = {
+        "total_units_received": total_units,
+        "total_shipment_received": len(unique_shipments),
+        "total_containers_received": len(unique_containers),
+        "avg_dock_to_stock_minutes": avg_dts
+    }
+
+    # ---------------------------------------------------
+    # FINAL RESPONSE
+    # ---------------------------------------------------
+    return {
+        "status": "success",
+        "from_date": from_date,
+        "to_date": to_date,
+        "summary": summary
+    }
+
 
 # ---------------------------------------------------------
 # LOCAL RUN
